@@ -8,6 +8,12 @@ from medical_encryptor import encrypt_medical_data
 from key_manager import generate_hospital_keys, encrypt_aes_key
 from IPFS_upload import upload_file_to_pinata
 from blockchain_registry import register_file_on_chain
+from ai_advisor import (
+    fetch_dur_taboo_info,
+    generate_medication_explanation,
+    build_health_stats,
+    generate_health_report,
+)
 
 app = Flask(__name__)
 
@@ -187,6 +193,86 @@ def list_files():
         "files": registry,
         "count": len(registry)
     })
+
+
+# ---------------------------------------------------------
+# 기능 A: 복약 설명 AI
+# 흐름: 처방 약물명 -> DUR API(공식 사실) -> LLM(쉬운 말로 설명)
+# ---------------------------------------------------------
+@app.route('/medication-info', methods=['POST'])
+def medication_info():
+    payload = request.get_json(silent=True) or {}
+
+    # 개인정보 보호: 약물명/진단명만 받는다. 환자 이름·ID 등은 이 엔드포인트로
+    # 애초에 넘기지 않도록 프론트/호출부에서 걸러야 한다.
+    drug_name = payload.get('prescription')
+    diagnosis = payload.get('diagnosis')  # 선택
+
+    if not drug_name:
+        return jsonify({"error": "약물명(prescription)이 필요합니다."}), 400
+
+    # 1. 공식 DUR 데이터 조회 (사실 확보)
+    try:
+        dur_data = fetch_dur_taboo_info(drug_name)
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 500
+
+    # 2. LLM으로 쉬운 말 설명 생성 (설명만 담당, 사실은 새로 만들지 않음)
+    try:
+        explanation = generate_medication_explanation(drug_name, dur_data, diagnosis)
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 500
+    except Exception as e:
+        return jsonify({"error": f"AI 설명 생성 중 오류가 발생했습니다: {str(e)}"}), 502
+
+    return jsonify({
+        "drug_name": drug_name,
+        "dur_data": dur_data,          # 원본 공식 데이터 (카드 하단 근거 표시용으로 활용 가능)
+        "explanation": explanation,     # LLM이 생성한 쉬운 설명 (효능/복용법/주의사항/병용금기)
+        "disclaimer": "이 정보는 참고용이며 정확한 복용법은 의료진·약사와 상담하세요."
+    }), 200
+
+
+# ---------------------------------------------------------
+# 기능 B: 건강 통계 리포트 AI
+# 흐름: 여러 visit 기록 -> pandas 통계(추세/변화율/이상치) -> LLM(자연어 리포트)
+# ---------------------------------------------------------
+@app.route('/health-report', methods=['POST'])
+def health_report():
+    payload = request.get_json(silent=True) or {}
+
+    # visits 예시:
+    # [{"date": "2026-06-01", "systolic": 128, "diastolic": 82, "glucose": 95}, ...]
+    visits = payload.get('visits')
+
+    # lifestyle 예시 (스키마 확장분, 가은님과 논의 필요):
+    # {"exercise_frequency": "주 2회", "rehab_status": "재활 진행 중"}
+    lifestyle = payload.get('lifestyle')
+
+    if not visits or not isinstance(visits, list):
+        return jsonify({"error": "visits(방문 기록 배열)가 필요합니다."}), 400
+
+    # 1. pandas로 통계 처리 (사실 확보 - LLM은 이 숫자를 벗어난 값을 말하면 안 됨)
+    try:
+        stats = build_health_stats(visits)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"통계 처리 중 오류가 발생했습니다: {str(e)}"}), 500
+
+    # 2. LLM으로 자연어 리포트 생성 (통계 요약값만 전달, 원본 방문기록/개인정보는 전달 안 함)
+    try:
+        report_text = generate_health_report(stats, lifestyle)
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 500
+    except Exception as e:
+        return jsonify({"error": f"AI 리포트 생성 중 오류가 발생했습니다: {str(e)}"}), 502
+
+    return jsonify({
+        "stats": stats,
+        "report": report_text,
+        "disclaimer": "이 리포트는 참고용이며 정확한 진단과 치료는 반드시 의료진과 상담하세요."
+    }), 200
 
 
 if __name__ == '__main__':

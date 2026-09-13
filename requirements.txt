@@ -3,3 +3,5 @@ cryptography
 requests
 web3
 pycryptodome
+pandas
+anthropic
