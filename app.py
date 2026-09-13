@@ -25,7 +25,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(ENCRYPTED_FOLDER, exist_ok=True)
 os.makedirs('keys', exist_ok=True)
 
-ALLOWED_EXTENSIONS = {'pdf'}
+ALLOWED_EXTENSIONS = {'json'}
 
 
 def allowed_file(filename):
@@ -78,7 +78,7 @@ def upload_file():
         return jsonify({"error": "선택된 파일이 없습니다."}), 400
 
     if not allowed_file(file.filename):
-        return jsonify({"error": "PDF 파일만 업로드 가능합니다."}), 400
+        return jsonify({"error": "JSON 파일만 업로드 가능합니다."}), 400
 
     # 파일명 충돌 방지를 위해 타임스탬프 prefix 추가
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -90,6 +90,14 @@ def upload_file():
         file.save(plain_path)
     except Exception as e:
         return jsonify({"error": f"파일 저장 중 오류가 발생했습니다: {str(e)}"}), 500
+
+    # 1-1. JSON 유효성 검증 (확장자만 .json이고 내용이 깨진 경우 여기서 걸러냄)
+    try:
+        with open(plain_path, 'r', encoding='utf-8') as f:
+            json.load(f)
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        os.remove(plain_path)
+        return jsonify({"error": f"올바른 JSON 형식이 아닙니다: {str(e)}"}), 400
 
     try:
         # 2. 암호화 (Fernet)
